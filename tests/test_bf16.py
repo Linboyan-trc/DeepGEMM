@@ -1,5 +1,5 @@
 import paddle
-paddle.compat.enable_torch_proxy()
+paddle.enable_compat()
 import copy
 import numpy as np
 import random
