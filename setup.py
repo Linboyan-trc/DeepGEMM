@@ -32,16 +32,6 @@ if DG_JIT_USE_RUNTIME_API:
 
 # Sources
 current_dir = os.path.dirname(os.path.realpath(__file__))
-sources = ['csrc/python_api.cpp']
-build_include_dirs = [
-    f'{CUDA_HOME}/include',
-    f'{CUDA_HOME}/include/cccl',
-    'deep_gemm/include',
-    'third-party/cutlass/include',
-    'third-party/fmt/include',
-]
-build_libraries = ['cudart', 'nvrtc']
-build_library_dirs = [f'{CUDA_HOME}/lib64']
 third_party_include_dirs = [
     'third-party/cutlass/include/cute',
     'third-party/cutlass/include/cutlass',
@@ -97,18 +87,6 @@ def get_wheel_url():
     wheel_filename = f'deep_gemm-{deep_gemm_version}+cu{cuda_version}-torch{torch_version}-cxx11abi{cxx11_abi}-{python_version}-{platform_name}.whl'
     wheel_url = base_wheel_url.format(tag_name=f'v{deep_gemm_version}', wheel_name=wheel_filename)
     return wheel_url, wheel_filename
-
-
-def get_ext_modules():
-    if DG_SKIP_CUDA_BUILD:
-        return []
-
-    return [CUDAExtension(name='deep_gemm._C',
-                          sources=sources,
-                          include_dirs=build_include_dirs,
-                          libraries=build_libraries,
-                          library_dirs=build_library_dirs,
-                          extra_compile_args=cxx_flags)]
 
 
 class CustomBuildPy(build_py):
@@ -191,9 +169,40 @@ class CachedWheelsCommand(_bdist_wheel):
             super().run()
 
 
+####################################################################################################
+# 1. 需要提前编译
+sources = ['csrc/python_api.cpp']
+build_include_dirs = [
+    f'{CUDA_HOME}/include',
+    f'{CUDA_HOME}/include/cccl',
+    'deep_gemm/include',
+    'third-party/cutlass/include',
+    'third-party/fmt/include',
+]
+build_libraries = ['cudart', 'nvrtc']
+build_library_dirs = [f'{CUDA_HOME}/lib64']
+def get_ext_modules():
+    if DG_SKIP_CUDA_BUILD:
+        return []
+
+    return [
+        CUDAExtension(
+                name='deep_gemm._C',
+                sources=sources,
+                include_dirs=build_include_dirs,
+                libraries=build_libraries,
+                library_dirs=build_library_dirs,
+                extra_compile_args=cxx_flags
+            )
+        ]
+
+
+####################################################################################################
+# 1. 设置
 if __name__ == '__main__':
-    # noinspection PyTypeChecker
     setuptools.setup(
+        # 1. 把整个项目打包成"deep_gemm"模块
+        # 1. 自动查找并包含DeepGEMM项目中的Python包，也就是有__init__.py的目录
         name='deep_gemm',
         version=get_package_version(),
         packages=find_packages('.'),
@@ -204,6 +213,9 @@ if __name__ == '__main__':
                 'include/cutlass/**/*',
             ]
         },
+
+        # 2. 指定整个项目运行所需要提前编译的包
+        # 2.1 也就是运行本项目中的.py文件前，需要对本项目中的c/c++编译好，而具体要编译什么c/c++文件，由ext_modules指定
         ext_modules=get_ext_modules(),
         zip_safe=False,
         cmdclass={

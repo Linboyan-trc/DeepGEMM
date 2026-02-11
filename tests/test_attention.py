@@ -30,37 +30,6 @@ def apply_skip_head_mid(d: torch.Tensor, head_splits: Tuple[int, int, int]):
     return torch.cat([d_left, d_mid, d_right], dim=2).view(m, -1)
 
 
-def test_gemm_skip_head_mid() -> None:
-    print('Testing GEMM skip head mid:')
-    head_splits = (128, 64, 128)
-
-    major_a, major_b = MajorTypeAB.KMajor,  MajorTypeAB.KMajor
-    out_dtype, accumulate = torch.bfloat16, False
-
-    for kernel_type in get_kernel_types(dtype=torch.float8_e4m3fn):
-        for m in (128, 4096):
-            for n, k in [(32768, 512), (8192, 512)]:
-                kernel_opt = f'1D1D' if kernel_type.is_1d1d() else '1D2D'
-                use_ue8m0 = get_ue8m0_usage(kernel_type)
-                disable_ue8m0_cast = not use_ue8m0
-
-                a, b, _, d, ref_d = generate_normal(m, n, k, major_a, major_b, accumulate, out_dtype, kernel_type, use_ue8m0=use_ue8m0)
-                d = apply_skip_head_mid(d, head_splits)
-                ref_d = apply_skip_head_mid(ref_d, head_splits)
-
-                deep_gemm.fp8_gemm_nt_skip_head_mid(a, b, d, head_splits, disable_ue8m0_cast=disable_ue8m0_cast)
-                diff = calc_diff(d, ref_d)
-                assert diff < 0.001, f'{m=}, {n=}, {k=}, {kernel_opt}, {diff:.5f}'
-
-                t = bench_kineto(lambda: deep_gemm.fp8_gemm_nt_skip_head_mid(a, b, d, head_splits, disable_ue8m0_cast=disable_ue8m0_cast),
-                                'fp8_gemm', suppress_kineto_output=True)
-                print(f' > Perf (m={m:5}, n={n:5}, k={k:5}, {kernel_opt}): '
-                    f'{t * 1e6:4.0f} us | '
-                    f'{2 * m * n * k / t / 1e12:4.0f} TFLOPS | '
-                    f'{(count_bytes(a, b, d)) / 1e9 / t:4.0f} GB/s')
-    print()
-
-
 def kv_cache_cast_to_fp8(x: torch.Tensor) -> torch.Tensor:
     num_blocks, block_size, num_heads, head_dim = x.shape
     assert num_heads == 1
@@ -273,13 +242,51 @@ def test_paged_mqa_logits():
     print()
 
 
+####################################################################################################
+# 1.1 测试
+def test_gemm_skip_head_mid() -> None:
+    # 1.1 表示把一个shape = [1024, 320]的张量切成[1024, 128], [1024, 64], [1024, 128]
+    # 1.1 就是按列切开，本来320列，切成128 + 64 + 128列
+    print('Testing GEMM skip head mid:')
+    head_splits = (128, 64, 128)
+
+    # 1.2 major_a = 0, major_b = 0
+    # 1.2.1 out_dtype输出类型是BF16，accumulate是False就是不做高精度accumulation
+    major_a, major_b = MajorTypeAB.KMajor,  MajorTypeAB.KMajor
+    out_dtype, accumulate = torch.bfloat16, False
+
+    for kernel_type in get_kernel_types(dtype=torch.float8_e4m3fn):
+        for m in (128, 4096):
+            for n, k in [(32768, 512), (8192, 512)]:
+                kernel_opt = f'1D1D' if kernel_type.is_1d1d() else '1D2D'
+                use_ue8m0 = get_ue8m0_usage(kernel_type)
+                disable_ue8m0_cast = not use_ue8m0
+
+                a, b, _, d, ref_d = generate_normal(m, n, k, major_a, major_b, accumulate, out_dtype, kernel_type, use_ue8m0=use_ue8m0)
+                d = apply_skip_head_mid(d, head_splits)
+                ref_d = apply_skip_head_mid(ref_d, head_splits)
+
+                deep_gemm.fp8_gemm_nt_skip_head_mid(a, b, d, head_splits, disable_ue8m0_cast=disable_ue8m0_cast)
+                diff = calc_diff(d, ref_d)
+                assert diff < 0.001, f'{m=}, {n=}, {k=}, {kernel_opt}, {diff:.5f}'
+
+                t = bench_kineto(lambda: deep_gemm.fp8_gemm_nt_skip_head_mid(a, b, d, head_splits, disable_ue8m0_cast=disable_ue8m0_cast),
+                                'fp8_gemm', suppress_kineto_output=True)
+                print(f' > Perf (m={m:5}, n={n:5}, k={k:5}, {kernel_opt}): '
+                    f'{t * 1e6:4.0f} us | '
+                    f'{2 * m * n * k / t / 1e12:4.0f} TFLOPS | '
+                    f'{(count_bytes(a, b, d)) / 1e9 / t:4.0f} GB/s')
+    print()
 
 
+####################################################################################################
+# 1. 测试
 if __name__ == '__main__':
+    # 1.1 随机种子
     torch.manual_seed(0)
     random.seed(0)
 
+    # 1.2 测试
     test_gemm_skip_head_mid()
-
     test_mqa_logits()
     test_paged_mqa_logits()
