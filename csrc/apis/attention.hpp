@@ -12,6 +12,7 @@
 #endif
 
 #include "layout.hpp"
+#include <iostream>
 
 namespace deep_gemm::attention {
 
@@ -83,18 +84,21 @@ static torch::Tensor fp8_mqa_logits(const torch::Tensor& q,
     const auto& [seq_len_kv, head_dim_] = get_shape<2>(kv.first);
     const auto& [seq_len_, num_heads_] = get_shape<2>(weights);
     const auto& [seq_len_kv_] = get_shape<1>(kv.second);
+    std::cout << "2. get shape" << std::endl;
 
     DG_HOST_ASSERT(seq_len == seq_len_);
     DG_HOST_ASSERT(num_heads == num_heads_ and head_dim == head_dim_);
     DG_HOST_ASSERT(seq_len_kv == seq_len_kv_);
     DG_HOST_ASSERT(cu_seq_len_k_start.size(0) == seq_len);
     DG_HOST_ASSERT(cu_seq_len_k_end.size(0) == seq_len);
+    std::cout << "3. verify tensor shape same" << std::endl;
 
     DG_HOST_ASSERT(q.is_contiguous() and kv.first.is_contiguous());
     DG_HOST_ASSERT(kv.second.is_contiguous());
     DG_HOST_ASSERT(weights.is_contiguous());
     DG_HOST_ASSERT(cu_seq_len_k_start.is_contiguous());
     DG_HOST_ASSERT(cu_seq_len_k_end.is_contiguous());
+    std::cout << "4. verify tensor is contiguous" << std::endl;
 
     DG_HOST_ASSERT(q.scalar_type() == torch::kFloat8_e4m3fn);
     DG_HOST_ASSERT(kv.first.scalar_type() == torch::kFloat8_e4m3fn);
@@ -102,17 +106,22 @@ static torch::Tensor fp8_mqa_logits(const torch::Tensor& q,
     DG_HOST_ASSERT(weights.scalar_type() == torch::kFloat);
     DG_HOST_ASSERT(cu_seq_len_k_start.scalar_type() == torch::kInt);
     DG_HOST_ASSERT(cu_seq_len_k_end.scalar_type() == torch::kInt);
+    std::cout << "5. verify tensor data type" << std::endl;
 
     constexpr int seq_len_alignment = 4;
-    constexpr int block_kv = 256;
     const auto aligned_seq_len = align(seq_len, seq_len_alignment);
-    
+    std::cout << "6. aligned_seq_len = " << aligned_seq_len << std::endl;
+
+    constexpr int block_kv = 256;
     torch::Tensor logits;
     int stride_logits;
     if (max_seqlen_k == 0) {
-        stride_logits = align(seq_len_kv + block_kv, 4);
-        logits = torch::empty({aligned_seq_len, stride_logits}, q.options().dtype(torch::kFloat));
-        logits = logits.index({torch::indexing::Slice(0, seq_len), torch::indexing::Slice(0, seq_len_kv)});
+        std::cout << "7. enter max_seqlen_k == 0 branch" << std::endl;
+        // stride_logits = align(seq_len_kv + block_kv, 4);
+        // logits = torch::empty({aligned_seq_len, stride_logits}, q.options().dtype(torch::kFloat));
+        // logits = logits.index({torch::indexing::Slice(0, seq_len), torch::indexing::Slice(0, seq_len_kv)});
+        stride_logits = align(seq_len_kv, block_kv); 
+        logits = torch::empty({seq_len, stride_logits}, q.options().dtype(torch::kFloat));
     } else {
         stride_logits = align(max_seqlen_k, block_kv);
         logits = torch::empty({aligned_seq_len, stride_logits}, q.options().dtype(torch::kFloat));
@@ -123,8 +132,13 @@ static torch::Tensor fp8_mqa_logits(const torch::Tensor& q,
     // Dispatch implementation
     const auto& arch_major = device_runtime->get_arch_major();
     if (arch_major == 9 or arch_major == 10) {
-        smxx_fp8_mqa_logits(q, kv.first, kv.second, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits,
-                            seq_len, seq_len_kv, max_seqlen_k, stride_logits, num_heads, head_dim, seq_len_alignment);
+        std::cout << "8. enter smxx_fp8_mqa_logits()" << std::endl;
+        const auto& [temp1, temp2] = get_shape<2>(logits);
+        std::cout << "9. logits.shape = " << temp1 << ", " << temp2 << std::endl;
+        smxx_fp8_mqa_logits(
+            q, kv.first, kv.second, weights, cu_seq_len_k_start, cu_seq_len_k_end, 
+            logits, seq_len, seq_len_kv, max_seqlen_k, stride_logits, num_heads, head_dim, seq_len_alignment
+        );
     } else {
         DG_HOST_UNREACHABLE("Unsupported architecture");
     }
